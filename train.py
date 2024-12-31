@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+from torch.utils.tensorboard import SummaryWriter
 
 from model import GPTConfig, GPT
 
@@ -77,6 +78,9 @@ config_keys = [k for k,v in globals().items() if not k.startswith('_') and isins
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
+
+# Initialize TensorBoard writer
+writer = SummaryWriter(log_dir='runs/experiment1')
 
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
@@ -246,6 +250,12 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+# Replace wandb logging with TensorBoard logging
+# Example: logging loss
+def log_metrics(iter_num, loss, val_loss):
+    writer.add_scalar('Loss/train', loss, iter_num)
+    writer.add_scalar('Loss/val', val_loss, iter_num)
+
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
@@ -271,6 +281,7 @@ while True:
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
             })
+        log_metrics(iter_num, losses['train'], losses['val'])
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:
@@ -331,6 +342,9 @@ while True:
     # termination conditions
     if iter_num > max_iters:
         break
+
+# Close the writer at the end
+writer.close()
 
 if ddp:
     destroy_process_group()
